@@ -1,0 +1,67 @@
+name: R2Remote
+
+options:
+  bundleIdPrefix: com.eccreative
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  R2Remote-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: ../Shared/WebApp
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: "R2 Remote"
+        PRODUCT_BUNDLE_IDENTIFIER: com.eccreative.r2remote
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_CFBundleDisplayName: "R2 Remote"
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "R2 Remote uses Bluetooth to connect directly to your R2-D2."
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "R2 Remote can connect to an optional Mac bridge on your local network."
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+
+  R2Remote-macOS:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+      - path: ../Shared/WebApp
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: "R2 Remote"
+        PRODUCT_BUNDLE_IDENTIFIER: com.eccreative.r2remote.mac
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: "R2 Remote"
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "R2 Remote uses Bluetooth to connect directly to your R2-D2."
+
+schemes:
+  R2Remote-iOS:
+    build:
+      targets:
+        R2Remote-iOS: all
+    run:
+      config: Debug
+
+  R2Remote-macOS:
+    build:
+      targets:
+        R2Remote-macOS: all
+    run:
+      config: Debug

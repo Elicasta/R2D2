@@ -47,6 +47,10 @@ function detectDroidKind(name: string | undefined): DroidKind | null {
   return null;
 }
 
+function message(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class WebBluetoothTransport implements R2Transport {
   readonly kind = "web-bluetooth" as const;
   readonly label = "Direct Bluetooth";
@@ -93,12 +97,26 @@ export class WebBluetoothTransport implements R2Transport {
       this.disconnectHandler?.();
     });
 
-    const server = await device.gatt.connect();
+    let server: BluetoothRemoteGATTServerLike;
+    try {
+      server = await device.gatt.connect();
+    } catch (error) {
+      this.robotKind = null;
+      throw new Error(`Bluetooth link failed: ${message(error)}`);
+    }
 
-    if (detected === "bb8") {
-      await this.initializeBB8(server);
-    } else {
-      await this.initializeR2(server);
+    try {
+      if (detected === "bb8") {
+        await this.initializeBB8(server);
+      } else {
+        await this.initializeR2(server);
+      }
+    } catch (error) {
+      device.gatt.disconnect();
+      this.command = undefined;
+      this.battery = undefined;
+      this.robotKind = null;
+      throw error;
     }
 
     return detected;
@@ -127,20 +145,73 @@ export class WebBluetoothTransport implements R2Transport {
   }
 
   private async initializeBB8(server: BluetoothRemoteGATTServerLike) {
-    const bleService = await server.getPrimaryService(BB8.bleService);
-    const antiDos = await bleService.getCharacteristic(BB8.antiDosCharacteristic);
-    const txPower = await bleService.getCharacteristic(BB8.txPowerCharacteristic);
-    const wake = await bleService.getCharacteristic(BB8.wakeCharacteristic);
+    let bleService: BluetoothRemoteGATTServiceLike;
+    try {
+      bleService = await server.getPrimaryService(BB8.bleService);
+    } catch (error) {
+      throw new Error(`BB-8 setup service failed: ${message(error)}`);
+    }
 
-    const controlService = await server.getPrimaryService(BB8.controlService);
-    this.command = await controlService.getCharacteristic(BB8.commandCharacteristic);
-    const response = await controlService.getCharacteristic(BB8.responseCharacteristic);
+    let antiDos: BluetoothRemoteGATTCharacteristicLike;
+    let txPower: BluetoothRemoteGATTCharacteristicLike;
+    let wake: BluetoothRemoteGATTCharacteristicLike;
 
-    await response.startNotifications();
-    await antiDos.writeValue(toArrayBuffer(BB8.antiDosMessage));
-    await txPower.writeValue(toArrayBuffer(new Uint8Array([0x07])));
-    await wake.writeValue(toArrayBuffer(new Uint8Array([0x01])));
+    try {
+      antiDos = await bleService.getCharacteristic(BB8.antiDosCharacteristic);
+      txPower = await bleService.getCharacteristic(BB8.txPowerCharacteristic);
+      wake = await bleService.getCharacteristic(BB8.wakeCharacteristic);
+    } catch (error) {
+      throw new Error(`BB-8 setup characteristics failed: ${message(error)}`);
+    }
+
+    // Chrome/Web Bluetooth is happiest with the original Sphero browser order:
+    // unlock the legacy BLE service first, then wake the droid, then touch the
+    // command/response service. Accessing the control service before this can
+    // fail with Chrome's generic "GATT operation failed for unknown reason".
+    try {
+      await antiDos.writeValue(toArrayBuffer(BB8.antiDosMessage));
+    } catch (error) {
+      throw new Error(`BB-8 Anti-DOS unlock failed: ${message(error)}`);
+    }
+
+    try {
+      await txPower.writeValue(toArrayBuffer(new Uint8Array([0x07])));
+    } catch (error) {
+      throw new Error(`BB-8 TX power setup failed: ${message(error)}`);
+    }
+
+    try {
+      await wake.writeValue(toArrayBuffer(new Uint8Array([0x01])));
+    } catch (error) {
+      throw new Error(`BB-8 wake failed: ${message(error)}`);
+    }
+
+    // The older BB-8 stack needs a short settle after wake before the control
+    // service is consistently usable from Chrome/macOS.
     await new Promise((resolve) => setTimeout(resolve, 500));
+
+    let controlService: BluetoothRemoteGATTServiceLike;
+    try {
+      controlService = await server.getPrimaryService(BB8.controlService);
+    } catch (error) {
+      throw new Error(`BB-8 control service failed after wake: ${message(error)}`);
+    }
+
+    try {
+      this.command = await controlService.getCharacteristic(BB8.commandCharacteristic);
+    } catch (error) {
+      throw new Error(`BB-8 command channel failed: ${message(error)}`);
+    }
+
+    // Responses are useful for battery/telemetry later, but are not required
+    // for driving. Some Chrome/macOS combinations reject notification setup on
+    // this legacy characteristic, so don't make it a connection blocker.
+    try {
+      const response = await controlService.getCharacteristic(BB8.responseCharacteristic);
+      await response.startNotifications();
+    } catch {
+      // Continue in command-only mode.
+    }
 
     this.battery = undefined;
   }

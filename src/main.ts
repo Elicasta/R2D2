@@ -2,14 +2,61 @@ import "./styles.css";
 import { R2Controller } from "./r2/protocol";
 import { createBestTransport } from "./transports/select";
 import { nativeHaptic } from "./transports/nativeBridge";
+import {
+  ACTION_LABELS,
+  BUTTON_LABELS,
+  DEFAULT_GAMEPAD_BINDINGS,
+  R2GamepadInput,
+  actionsForButton,
+  loadGamepadBindings,
+  saveGamepadBindings,
+  type GamepadAction,
+  type GamepadBindings,
+  type GamepadSnapshot
+} from "./gamepad/controller";
 
 const transport = createBestTransport();
 const r2 = new R2Controller(transport);
+const gamepad = new R2GamepadInput();
 
 let connected = false;
 let battery: number | null = null;
-let driving = false;
+let pointerDriving = false;
 let driveTimer = 0;
+let gamepadBindings: GamepadBindings = loadGamepadBindings();
+let currentDome = 0;
+let lightsOn = true;
+let gamepadConnected = false;
+let lastGamepadDriveKey = "";
+let lastGamepadDriveAt = 0;
+let lastGamepadTick = performance.now();
+let latestGamepad: GamepadSnapshot = {
+  leftX: 0,
+  leftY: 0,
+  rightX: 0,
+  rightY: 0,
+  leftTrigger: 0,
+  rightTrigger: 0,
+  buttons: {
+    a: false,
+    b: false,
+    x: false,
+    y: false,
+    lb: false,
+    rb: false,
+    view: false,
+    menu: false,
+    leftStick: false,
+    rightStick: false,
+    dpadUp: false,
+    dpadDown: false,
+    dpadLeft: false,
+    dpadRight: false
+  }
+};
+
+const GAMEPAD_SOUNDS = ["positive", "chatty", "excited", "alarm", "scream"] as const;
+let gamepadSoundIndex = 0;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -38,6 +85,22 @@ app.innerHTML = `
       <div class="status-cell">
         <span>State</span>
         <strong id="stateLabel">Offline</strong>
+      </div>
+    </section>
+
+    <section class="controller-banner">
+      <div class="controller-status">
+        <span id="gamepadDot" class="gamepad-dot"></span>
+        <div>
+          <span class="controller-kicker">XBOX CONTROLLER</span>
+          <strong id="gamepadName">Not connected</strong>
+        </div>
+      </div>
+      <div class="controller-axis-chips">
+        <span><b>LS</b> Drive</span>
+        <span><b>RS</b> Dome</span>
+        <span><b>LT</b> Precision</span>
+        <span><b>RT</b> Boost</span>
       </div>
     </section>
 
@@ -164,6 +227,26 @@ app.innerHTML = `
         </div>
       </article>
 
+      <article class="panel controller-panel">
+        <div class="panel-heading">
+          <div>
+            <span class="panel-kicker">GAMEPAD</span>
+            <h2>Xbox Mapping</h2>
+          </div>
+          <button id="resetMappings" class="small-button">Defaults</button>
+        </div>
+
+        <p class="hint controller-hint">
+          Pair the controller in Bluetooth settings. Button changes save automatically.
+          Menu is the emergency stop by default.
+        </p>
+
+        <details class="mapping-details">
+          <summary>Button mappings</summary>
+          <div id="mappingGrid" class="mapping-grid"></div>
+        </details>
+      </article>
+
       <article class="panel power-panel">
         <div class="panel-heading">
           <div>
@@ -175,7 +258,7 @@ app.innerHTML = `
           <button id="wakeButton">Wake</button>
           <button id="sleepButton" class="danger-soft">Sleep</button>
         </div>
-        <p class="hint">Drive stops immediately when your finger leaves the pad or the app loses control.</p>
+        <p class="hint">Drive stops immediately when touch control releases, the Xbox stick returns to neutral, or the controller disconnects.</p>
       </article>
     </section>
   </main>
@@ -191,6 +274,9 @@ const speedValue = document.querySelector<HTMLElement>("#speedValue")!;
 const headingValue = document.querySelector<HTMLElement>("#headingValue")!;
 const domeSlider = document.querySelector<HTMLInputElement>("#domeSlider")!;
 const domeValue = document.querySelector<HTMLElement>("#domeValue")!;
+const gamepadDot = document.querySelector<HTMLElement>("#gamepadDot")!;
+const gamepadName = document.querySelector<HTMLElement>("#gamepadName")!;
+const mappingGrid = document.querySelector<HTMLDivElement>("#mappingGrid")!;
 
 function setState(label: string, isConnected = connected) {
   stateLabel.textContent = label;
@@ -201,7 +287,7 @@ function setState(label: string, isConnected = connected) {
 function requireConnected() {
   if (connected) return true;
   setState("Connect first");
-  nativeHaptic("medium");
+  void nativeHaptic("medium");
   return false;
 }
 
@@ -217,7 +303,8 @@ async function refreshBattery() {
 
 transport.onDisconnect?.(() => {
   connected = false;
-  stopDriving(false);
+  stopPointerDriving(false);
+  lastGamepadDriveKey = "";
   setState("Disconnected", false);
 });
 
@@ -273,7 +360,7 @@ async function sendDrive(speed: number, heading: number) {
   }
 }
 
-function updateJoystick(event: PointerEvent) {
+function updatePointerJoystick(event: PointerEvent) {
   const point = joystickPoint(event);
   knob.style.transform = `translate(${point.x}px, ${point.y}px)`;
   const speed = Math.round(point.ratio * 180);
@@ -284,34 +371,45 @@ function updateJoystick(event: PointerEvent) {
   driveTimer = window.setTimeout(() => void sendDrive(speed, point.heading), 25);
 }
 
-function stopDriving(sendStop = true) {
-  driving = false;
+function stopPointerDriving(sendStop = true) {
+  pointerDriving = false;
   if (driveTimer) window.clearTimeout(driveTimer);
   driveTimer = 0;
-  knob.style.transform = "translate(0px, 0px)";
-  speedValue.textContent = "0";
+
+  if (!gamepadConnected || Math.hypot(latestGamepad.leftX, latestGamepad.leftY) < 0.14) {
+    knob.style.transform = "translate(0px, 0px)";
+    speedValue.textContent = "0";
+  }
+
   if (sendStop && connected) void r2.stop();
 }
 
 joystick.addEventListener("pointerdown", (event) => {
   if (!requireConnected()) return;
-  driving = true;
+  pointerDriving = true;
   joystick.setPointerCapture(event.pointerId);
   void nativeHaptic("light");
-  updateJoystick(event);
+  updatePointerJoystick(event);
 });
 
 joystick.addEventListener("pointermove", (event) => {
-  if (driving) updateJoystick(event);
+  if (pointerDriving) updatePointerJoystick(event);
 });
 
 for (const eventName of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
-  joystick.addEventListener(eventName, () => stopDriving());
+  joystick.addEventListener(eventName, () => stopPointerDriving());
 }
 
-window.addEventListener("blur", () => stopDriving());
+window.addEventListener("blur", () => {
+  stopPointerDriving();
+  if (connected) void r2.stop();
+});
+
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) stopDriving();
+  if (document.hidden) {
+    stopPointerDriving();
+    if (connected) void r2.stop();
+  }
 });
 
 document.querySelector("#resetYaw")?.addEventListener("click", async () => {
@@ -322,14 +420,15 @@ document.querySelector("#resetYaw")?.addEventListener("click", async () => {
 
 async function setDome(value: number) {
   if (!requireConnected()) return;
-  domeSlider.value = String(value);
-  domeValue.textContent = `${value}°`;
-  await r2.setHeadPosition(value);
+  currentDome = Math.max(-160, Math.min(180, Math.round(value)));
+  domeSlider.value = String(currentDome);
+  domeValue.textContent = `${currentDome}°`;
+  await r2.setHeadPosition(currentDome);
 }
 
 domeSlider.addEventListener("input", () => {
-  const value = Number(domeSlider.value);
-  domeValue.textContent = `${value}°`;
+  currentDome = Number(domeSlider.value);
+  domeValue.textContent = `${currentDome}°`;
 });
 
 domeSlider.addEventListener("change", () => void setDome(Number(domeSlider.value)));
@@ -351,7 +450,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-animation]").forEach((button
   button.addEventListener("click", async () => {
     if (!requireConnected()) return;
     await nativeHaptic("light");
-    await r2.playAnimation(button.dataset.animation as any);
+    await r2.playAnimation(button.dataset.animation as "yes" | "no" | "excited" | "happy" | "curious" | "scan" | "laugh" | "scared");
   });
 });
 
@@ -363,7 +462,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-sound]").forEach((button) =>
   button.addEventListener("click", async () => {
     if (!requireConnected()) return;
     await nativeHaptic("light");
-    await r2.playSound(button.dataset.sound as any);
+    await r2.playSound(button.dataset.sound as "positive" | "chatty" | "excited" | "alarm" | "scream");
   });
 });
 
@@ -412,8 +511,256 @@ document.querySelector("#wakeButton")?.addEventListener("click", async () => {
 
 document.querySelector("#sleepButton")?.addEventListener("click", async () => {
   if (!requireConnected()) return;
-  stopDriving();
+  stopPointerDriving();
   await r2.sleep();
 });
 
+function renderMappings() {
+  const buttonEntries = Object.entries(BUTTON_LABELS) as Array<[keyof typeof BUTTON_LABELS, string]>;
+
+  mappingGrid.innerHTML = (Object.entries(ACTION_LABELS) as Array<[GamepadAction, string]>)
+    .map(([action, label]) => {
+      const options = buttonEntries
+        .map(([button, buttonLabel]) => `<option value="${button}" ${gamepadBindings[action] === button ? "selected" : ""}>${buttonLabel}</option>`)
+        .join("");
+
+      return `
+        <label class="mapping-row">
+          <span>${label}</span>
+          <select data-gamepad-action="${action}">${options}</select>
+        </label>
+      `;
+    })
+    .join("");
+
+  mappingGrid.querySelectorAll<HTMLSelectElement>("select[data-gamepad-action]").forEach((select) => {
+    select.addEventListener("change", () => {
+      const action = select.dataset.gamepadAction as GamepadAction;
+      gamepadBindings = {
+        ...gamepadBindings,
+        [action]: select.value
+      } as GamepadBindings;
+      saveGamepadBindings(gamepadBindings);
+    });
+  });
+}
+
+document.querySelector("#resetMappings")?.addEventListener("click", () => {
+  gamepadBindings = { ...DEFAULT_GAMEPAD_BINDINGS };
+  saveGamepadBindings(gamepadBindings);
+  renderMappings();
+  void nativeHaptic("medium");
+});
+
+function updateGamepadStatus(isConnected: boolean, name: string) {
+  gamepadConnected = isConnected;
+  gamepadDot.classList.toggle("connected", isConnected);
+  gamepadName.textContent = isConnected ? name : "Not connected";
+
+  if (!isConnected) {
+    latestGamepad = {
+      ...latestGamepad,
+      leftX: 0,
+      leftY: 0,
+      rightX: 0,
+      rightY: 0,
+      leftTrigger: 0,
+      rightTrigger: 0
+    };
+    lastGamepadDriveKey = "";
+    if (connected) void r2.stop();
+  }
+}
+
+async function emergencyStop() {
+  lastGamepadDriveKey = "";
+  stopPointerDriving(false);
+  knob.style.transform = "translate(0px, 0px)";
+  speedValue.textContent = "0";
+
+  if (!connected) return;
+
+  await nativeHaptic("heavy");
+  await Promise.allSettled([
+    r2.stop(),
+    r2.stopAnimation(),
+    r2.stopAudio(),
+    r2.setStance("stop")
+  ]);
+}
+
+async function toggleLights() {
+  if (!requireConnected()) return;
+
+  lightsOn = !lightsOn;
+  if (lightsOn) {
+    await Promise.all([
+      r2.setFrontLed(22, 71, 255),
+      r2.setBackLed(255, 47, 47),
+      r2.setLogicDisplay(180),
+      r2.setHoloProjector(180)
+    ]);
+  } else {
+    await Promise.all([
+      r2.setFrontLed(0, 0, 0),
+      r2.setBackLed(0, 0, 0),
+      r2.setLogicDisplay(0),
+      r2.setHoloProjector(0)
+    ]);
+  }
+}
+
+async function cycleGamepadSound(direction: -1 | 1) {
+  if (!requireConnected()) return;
+  gamepadSoundIndex = (gamepadSoundIndex + direction + GAMEPAD_SOUNDS.length) % GAMEPAD_SOUNDS.length;
+  await r2.playSound(GAMEPAD_SOUNDS[gamepadSoundIndex]);
+}
+
+async function runGamepadAction(action: GamepadAction) {
+  if (action === "emergencyStop") {
+    await emergencyStop();
+    return;
+  }
+
+  if (!requireConnected()) return;
+
+  switch (action) {
+  case "happy":
+    await Promise.allSettled([r2.playAnimation("happy"), r2.playSound("positive")]);
+    break;
+  case "negative":
+    await r2.playAnimation("no");
+    break;
+  case "scan":
+    await r2.playAnimation("scan");
+    break;
+  case "excited":
+    await Promise.allSettled([r2.playAnimation("excited"), r2.playSound("excited")]);
+    break;
+  case "previousSound":
+    await cycleGamepadSound(-1);
+    break;
+  case "nextSound":
+    await cycleGamepadSound(1);
+    break;
+  case "tripod":
+    await r2.setStance("tripod");
+    break;
+  case "bipod":
+    await r2.setStance("bipod");
+    break;
+  case "domeLeft":
+    await setDome(-90);
+    break;
+  case "domeRight":
+    await setDome(90);
+    break;
+  case "resetYaw":
+    await r2.resetYaw();
+    break;
+  case "centerDome":
+    await setDome(0);
+    break;
+  case "toggleLights":
+    await toggleLights();
+    break;
+  }
+}
+
+gamepad.onStatus = (status) => {
+  updateGamepadStatus(status.connected, status.name);
+};
+
+gamepad.onButtonDown = (button) => {
+  const actions = actionsForButton(gamepadBindings, button);
+  actions.forEach((action) => void runGamepadAction(action));
+};
+
+gamepad.onSnapshot = (snapshot) => {
+  latestGamepad = snapshot;
+};
+
+function updateGamepadDrive(now: number) {
+  if (!gamepadConnected || !connected || pointerDriving) return;
+
+  const deadzone = 0.14;
+  const magnitude = Math.min(1, Math.hypot(latestGamepad.leftX, latestGamepad.leftY));
+
+  if (magnitude < deadzone) {
+    if (lastGamepadDriveKey) {
+      lastGamepadDriveKey = "";
+      void r2.stop();
+      knob.style.transform = "translate(0px, 0px)";
+      speedValue.textContent = "0";
+    }
+    return;
+  }
+
+  const normalizedMagnitude = (magnitude - deadzone) / (1 - deadzone);
+  const heading = (
+    Math.round((Math.atan2(latestGamepad.leftX, latestGamepad.leftY) * 180) / Math.PI) + 360
+  ) % 360;
+
+  let maxSpeed = 180;
+  if (latestGamepad.leftTrigger > 0.08) {
+    maxSpeed = Math.round(80 - latestGamepad.leftTrigger * 25);
+  } else if (latestGamepad.rightTrigger > 0.08) {
+    maxSpeed = Math.round(180 + latestGamepad.rightTrigger * 75);
+  }
+
+  const speed = Math.round(normalizedMagnitude * maxSpeed);
+  const driveKey = `${speed}:${heading}`;
+
+  if (driveKey !== lastGamepadDriveKey || now - lastGamepadDriveAt > 250) {
+    lastGamepadDriveKey = driveKey;
+    lastGamepadDriveAt = now;
+    void sendDrive(speed, heading);
+  }
+
+  const maxTravel = joystick.clientWidth * 0.36;
+  const scale = normalizedMagnitude / Math.max(magnitude, 0.0001);
+  const x = latestGamepad.leftX * scale * maxTravel;
+  const y = -latestGamepad.leftY * scale * maxTravel;
+  knob.style.transform = `translate(${x}px, ${y}px)`;
+  speedValue.textContent = String(speed);
+  headingValue.textContent = `${heading}°`;
+}
+
+function updateGamepadDome(now: number) {
+  if (!gamepadConnected || !connected) return;
+
+  const x = Math.abs(latestGamepad.rightX) < 0.16 ? 0 : latestGamepad.rightX;
+  if (!x) return;
+
+  const deltaMs = Math.min(100, now - lastGamepadTick);
+  const degreesPerSecond = 110;
+  const next = currentDome + x * degreesPerSecond * (deltaMs / 1000);
+  currentDome = Math.max(-160, Math.min(180, next));
+
+  if (now - Number(domeSlider.dataset.lastGamepadSend || "0") >= 65) {
+    domeSlider.dataset.lastGamepadSend = String(now);
+    domeSlider.value = String(Math.round(currentDome));
+    domeValue.textContent = `${Math.round(currentDome)}°`;
+    void r2.setHeadPosition(currentDome);
+  }
+}
+
+function gamepadLoop(now: number) {
+  updateGamepadDrive(now);
+  updateGamepadDome(now);
+  lastGamepadTick = now;
+  requestAnimationFrame(gamepadLoop);
+}
+
+renderMappings();
+gamepad.start();
+
+if (window.webkit?.messageHandlers?.r2bridge) {
+  window.webkit.messageHandlers.r2bridge.postMessage({
+    id: 0,
+    action: "refreshGamepad"
+  });
+}
+
+requestAnimationFrame(gamepadLoop);
 setState(transport.available ? "Ready" : "Bluetooth unavailable", false);

@@ -33,6 +33,12 @@ type BluetoothNavigator = Navigator & {
   };
 };
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 export class WebBluetoothTransport implements R2Transport {
   readonly kind = "web-bluetooth" as const;
   readonly label = "Direct Bluetooth";
@@ -65,7 +71,7 @@ export class WebBluetoothTransport implements R2Transport {
     this.command = await commandService.getCharacteristic(R2.commandCharacteristic);
 
     await notify.startNotifications().catch(() => undefined);
-    await auth.writeValue(R2.authMessage);
+    await auth.writeValue(toArrayBuffer(R2.authMessage));
     await this.command.startNotifications().catch(() => undefined);
 
     try {
@@ -86,10 +92,11 @@ export class WebBluetoothTransport implements R2Transport {
 
   async send(packet: Uint8Array) {
     if (!this.command) throw new Error("R2-D2 is not connected");
+    const buffer = toArrayBuffer(packet);
     if (this.command.writeValueWithoutResponse) {
-      await this.command.writeValueWithoutResponse(packet);
+      await this.command.writeValueWithoutResponse(buffer);
     } else {
-      await this.command.writeValue(packet);
+      await this.command.writeValue(buffer);
     }
   }
 

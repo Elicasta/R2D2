@@ -1,0 +1,56 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install
+      - run: npm test
+      - run: npm run build
+
+  apple:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install
+      - run: npm test
+      - run: bash scripts/sync-native-web.sh
+      - run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: native/Apple
+        run: xcodegen generate
+      - name: Build iPhone/iPad simulator app
+        working-directory: native/Apple
+        run: >
+          xcodebuild
+          -project R2Remote.xcodeproj
+          -scheme R2Remote-iOS
+          -sdk iphonesimulator
+          -configuration Debug
+          -derivedDataPath "$RUNNER_TEMP/r2-ios"
+          CODE_SIGNING_ALLOWED=NO
+          build
+      - name: Build Mac app
+        working-directory: native/Apple
+        run: >
+          xcodebuild
+          -project R2Remote.xcodeproj
+          -scheme R2Remote-macOS
+          -configuration Debug
+          -derivedDataPath "$RUNNER_TEMP/r2-mac"
+          CODE_SIGNING_ALLOWED=NO
+          build

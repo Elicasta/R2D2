@@ -23,6 +23,8 @@ let connected = false;
 let battery: number | null = null;
 let pointerDriving = false;
 let driveTimer = 0;
+let pendingPointerDrive: { speed: number; heading: number } | null = null;
+let lastPointerDriveAt = 0;
 let gamepadBindings: GamepadBindings = loadGamepadBindings();
 let currentDome = 0;
 let lightsOn = true;
@@ -64,8 +66,8 @@ app.innerHTML = `
   <main class="shell">
     <header class="topbar">
       <div>
-        <div class="eyebrow">R2 UNIT CONTROL</div>
-        <h1>R2-D2</h1>
+        <div id="droidEyebrow" class="eyebrow">DROID CONTROL</div>
+        <h1 id="droidTitle">R2-D2</h1>
       </div>
       <button id="connectButton" class="connect-button">
         <span class="status-dot"></span>
@@ -98,7 +100,7 @@ app.innerHTML = `
       </div>
       <div class="controller-axis-chips">
         <span><b>LS</b> Drive</span>
-        <span><b>RS</b> Dome</span>
+        <span id="rightStickHint"><b>RS</b> Dome</span>
         <span><b>LT</b> Precision</span>
         <span><b>RT</b> Boost</span>
       </div>
@@ -130,7 +132,7 @@ app.innerHTML = `
         </div>
       </article>
 
-      <article class="panel dome-panel">
+      <article class="panel dome-panel" data-r2-only>
         <div class="panel-heading">
           <div>
             <span class="panel-kicker">HEAD</span>
@@ -159,7 +161,7 @@ app.innerHTML = `
         </div>
       </article>
 
-      <article class="panel">
+      <article class="panel" data-r2-only>
         <div class="panel-heading">
           <div>
             <span class="panel-kicker">PERSONALITY</span>
@@ -179,7 +181,7 @@ app.innerHTML = `
         </div>
       </article>
 
-      <article class="panel">
+      <article class="panel" data-r2-only>
         <div class="panel-heading">
           <div>
             <span class="panel-kicker">AUDIO</span>
@@ -200,7 +202,7 @@ app.innerHTML = `
         </div>
       </article>
 
-      <article class="panel lights-panel">
+      <article class="panel lights-panel" data-r2-only>
         <div class="panel-heading">
           <div>
             <span class="panel-kicker">LIGHTING</span>
@@ -225,6 +227,33 @@ app.innerHTML = `
             <input id="holoSlider" class="range" type="range" min="0" max="255" value="180" />
           </label>
         </div>
+      </article>
+
+      <article id="bb8Panel" class="panel bb8-panel droid-hidden">
+        <div class="panel-heading">
+          <div>
+            <span class="panel-kicker">BB-8 SYSTEMS</span>
+            <h2>Body & Calibration</h2>
+          </div>
+        </div>
+
+        <div class="light-grid">
+          <label>
+            <span>Body RGB</span>
+            <input id="bb8BodyColor" type="color" value="#ff9f2f" />
+          </label>
+          <label class="slider-card">
+            <span>Rear aiming LED</span>
+            <input id="bb8RearLed" class="range" type="range" min="0" max="255" value="0" />
+          </label>
+        </div>
+
+        <div class="bb8-calibration-actions">
+          <button id="bb8StartCalibration">Aim / Calibrate</button>
+          <button id="bb8FinishCalibration">Set Front</button>
+        </div>
+
+        <p class="hint">Aim / Calibrate disables stabilization and turns on the rear aiming LED. Point BB-8 away from you, then press Set Front.</p>
       </article>
 
       <article class="panel controller-panel">
@@ -277,6 +306,28 @@ const domeValue = document.querySelector<HTMLElement>("#domeValue")!;
 const gamepadDot = document.querySelector<HTMLElement>("#gamepadDot")!;
 const gamepadName = document.querySelector<HTMLElement>("#gamepadName")!;
 const mappingGrid = document.querySelector<HTMLDivElement>("#mappingGrid")!;
+const droidTitle = document.querySelector<HTMLElement>("#droidTitle")!;
+const droidEyebrow = document.querySelector<HTMLElement>("#droidEyebrow")!;
+const rightStickHint = document.querySelector<HTMLElement>("#rightStickHint")!;
+const resetYawButton = document.querySelector<HTMLButtonElement>("#resetYaw")!;
+const bb8Panel = document.querySelector<HTMLElement>("#bb8Panel")!;
+const bb8BodyColor = document.querySelector<HTMLInputElement>("#bb8BodyColor")!;
+const bb8RearLed = document.querySelector<HTMLInputElement>("#bb8RearLed")!;
+
+function applyDroidMode(kind: "r2d2" | "bb8") {
+  const isBB8 = kind === "bb8";
+
+  droidTitle.textContent = isBB8 ? "BB-8" : "R2-D2";
+  droidEyebrow.textContent = isBB8 ? "SPHERO DROID CONTROL" : "R2 UNIT CONTROL";
+  resetYawButton.textContent = isBB8 ? "Set front" : "Reset front";
+  rightStickHint.innerHTML = isBB8 ? "<b>RS</b> —" : "<b>RS</b> Dome";
+
+  document.querySelectorAll<HTMLElement>("[data-r2-only]").forEach((element) => {
+    element.classList.toggle("droid-hidden", isBB8);
+  });
+
+  bb8Panel.classList.toggle("droid-hidden", !isBB8);
+}
 
 function setState(label: string, isConnected = connected) {
   stateLabel.textContent = label;
@@ -320,9 +371,10 @@ connectButton.addEventListener("click", async () => {
   try {
     setState("Connecting", false);
     connectButton.disabled = true;
-    await r2.connect();
+    const kind = await r2.connect();
     connected = true;
-    setState("Connected", true);
+    applyDroidMode(kind);
+    setState(kind === "bb8" ? "BB-8 Connected" : "R2-D2 Connected", true);
     await nativeHaptic("medium");
     await refreshBattery();
   } catch (error) {
@@ -360,21 +412,46 @@ async function sendDrive(speed: number, heading: number) {
   }
 }
 
+function flushPointerDrive() {
+  driveTimer = 0;
+  if (!pendingPointerDrive) return;
+
+  const command = pendingPointerDrive;
+  pendingPointerDrive = null;
+  lastPointerDriveAt = performance.now();
+  void sendDrive(command.speed, command.heading);
+}
+
+function queuePointerDrive(speed: number, heading: number) {
+  pendingPointerDrive = { speed, heading };
+
+  const interval = r2.isBB8 ? 70 : 35;
+  const elapsed = performance.now() - lastPointerDriveAt;
+
+  if (elapsed >= interval) {
+    flushPointerDrive();
+    return;
+  }
+
+  if (!driveTimer) {
+    driveTimer = window.setTimeout(flushPointerDrive, Math.max(1, interval - elapsed));
+  }
+}
+
 function updatePointerJoystick(event: PointerEvent) {
   const point = joystickPoint(event);
   knob.style.transform = `translate(${point.x}px, ${point.y}px)`;
   const speed = Math.round(point.ratio * 180);
   speedValue.textContent = String(speed);
   headingValue.textContent = `${point.heading}°`;
-
-  if (driveTimer) window.clearTimeout(driveTimer);
-  driveTimer = window.setTimeout(() => void sendDrive(speed, point.heading), 25);
+  queuePointerDrive(speed, point.heading);
 }
 
 function stopPointerDriving(sendStop = true) {
   pointerDriving = false;
   if (driveTimer) window.clearTimeout(driveTimer);
   driveTimer = 0;
+  pendingPointerDrive = null;
 
   if (!gamepadConnected || Math.hypot(latestGamepad.leftX, latestGamepad.leftY) < 0.14) {
     knob.style.transform = "translate(0px, 0px)";
@@ -503,6 +580,31 @@ document.querySelector<HTMLInputElement>("#holoSlider")?.addEventListener("chang
   if (requireConnected()) void r2.setHoloProjector(Number((event.target as HTMLInputElement).value));
 });
 
+bb8BodyColor.addEventListener("change", () => {
+  if (!requireConnected() || !r2.isBB8) return;
+  const [r, g, b] = hexToRgb(bb8BodyColor.value);
+  void r2.setFrontLed(r, g, b);
+});
+
+bb8RearLed.addEventListener("change", () => {
+  if (!requireConnected() || !r2.isBB8) return;
+  void r2.setBB8RearLed(Number(bb8RearLed.value));
+});
+
+document.querySelector("#bb8StartCalibration")?.addEventListener("click", async () => {
+  if (!requireConnected() || !r2.isBB8) return;
+  await nativeHaptic("medium");
+  await r2.startCalibration();
+  bb8RearLed.value = "255";
+});
+
+document.querySelector("#bb8FinishCalibration")?.addEventListener("click", async () => {
+  if (!requireConnected() || !r2.isBB8) return;
+  await nativeHaptic("medium");
+  await r2.finishCalibration();
+  bb8RearLed.value = "0";
+});
+
 document.querySelector("#wakeButton")?.addEventListener("click", async () => {
   if (!requireConnected()) return;
   await nativeHaptic("medium");
@@ -593,6 +695,18 @@ async function toggleLights() {
   if (!requireConnected()) return;
 
   lightsOn = !lightsOn;
+
+  if (r2.isBB8) {
+    if (lightsOn) {
+      const [r, g, b] = hexToRgb(bb8BodyColor.value);
+      await r2.setFrontLed(r, g, b);
+    } else {
+      await r2.setFrontLed(0, 0, 0);
+      await r2.setBB8RearLed(0);
+    }
+    return;
+  }
+
   if (lightsOn) {
     await Promise.all([
       r2.setFrontLed(22, 71, 255),
@@ -711,7 +825,11 @@ function updateGamepadDrive(now: number) {
   const speed = Math.round(normalizedMagnitude * maxSpeed);
   const driveKey = `${speed}:${heading}`;
 
-  if (driveKey !== lastGamepadDriveKey || now - lastGamepadDriveAt > 250) {
+  const minDriveInterval = r2.isBB8 ? 70 : 35;
+  if (
+    (driveKey !== lastGamepadDriveKey && now - lastGamepadDriveAt >= minDriveInterval) ||
+    now - lastGamepadDriveAt > 250
+  ) {
     lastGamepadDriveKey = driveKey;
     lastGamepadDriveAt = now;
     void sendDrive(speed, heading);
@@ -727,7 +845,7 @@ function updateGamepadDrive(now: number) {
 }
 
 function updateGamepadDome(now: number) {
-  if (!gamepadConnected || !connected) return;
+  if (!gamepadConnected || !connected || r2.isBB8) return;
 
   const x = Math.abs(latestGamepad.rightX) < 0.16 ? 0 : latestGamepad.rightX;
   if (!x) return;

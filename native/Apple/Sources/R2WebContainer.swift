@@ -10,7 +10,10 @@ private final class R2WebViewFactory {
 
         let configuration = WKWebViewConfiguration()
         configuration.userContentController = contentController
+
+        #if os(iOS)
         configuration.allowsInlineMediaPlayback = true
+        #endif
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         bridge.webView = webView

@@ -13,8 +13,9 @@ export function createBestTransport(): R2Transport {
     kind: "mac-bridge",
     label: "Mac Bridge Required",
     available: false,
+    robotKind: null,
     connect: async () => {
-      throw new Error("Direct Bluetooth is unavailable here. Open R2 Remote on iPhone/iPad or Android, or connect through the Mac bridge.");
+      throw new Error("Direct Bluetooth is unavailable here. Open the native app on iPhone/iPad or use a Web Bluetooth browser.");
     },
     disconnect: async () => undefined,
     send: async () => { throw new Error("No transport available"); },

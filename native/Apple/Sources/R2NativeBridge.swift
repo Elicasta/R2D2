@@ -9,7 +9,15 @@ import AppKit
 
 final class R2NativeBridge: NSObject, WKScriptMessageHandler {
     private let bluetooth = R2BluetoothManager()
-    weak var webView: WKWebView?
+    private let gameController = R2GameControllerManager()
+
+    weak var webView: WKWebView? {
+        didSet {
+            if webView != nil {
+                gameController.start()
+            }
+        }
+    }
 
     override init() {
         super.init()
@@ -20,6 +28,14 @@ final class R2NativeBridge: NSObject, WKScriptMessageHandler {
                     "window.__r2NativeDisconnected && window.__r2NativeDisconnected();"
                 )
             }
+        }
+
+        gameController.onStatus = { [weak self] status in
+            self?.emitJavaScript(function: "window.__r2GamepadStatus", payload: status)
+        }
+
+        gameController.onSnapshot = { [weak self] snapshot in
+            self?.emitJavaScript(function: "window.__r2GamepadEvent", payload: snapshot)
         }
     }
 
@@ -70,6 +86,12 @@ final class R2NativeBridge: NSObject, WKScriptMessageHandler {
                 reply(id: id, value: NSNull())
             }
 
+        case "refreshGamepad":
+            gameController.emitCurrentStatus()
+            if id != 0 {
+                reply(id: id, value: NSNull())
+            }
+
         default:
             reply(id: id, error: "Unknown native action: \(action)")
         }
@@ -101,6 +123,10 @@ final class R2NativeBridge: NSObject, WKScriptMessageHandler {
     }
 
     private func emit(_ payload: [String: Any]) {
+        emitJavaScript(function: "window.__r2NativeResolve", payload: payload)
+    }
+
+    private func emitJavaScript(function: String, payload: [String: Any]) {
         guard JSONSerialization.isValidJSONObject(payload),
               let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8)
@@ -108,7 +134,7 @@ final class R2NativeBridge: NSObject, WKScriptMessageHandler {
 
         DispatchQueue.main.async { [weak self] in
             self?.webView?.evaluateJavaScript(
-                "window.__r2NativeResolve && window.__r2NativeResolve(\(json));"
+                "\(function) && \(function)(\(json));"
             )
         }
     }

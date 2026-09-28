@@ -47,7 +47,7 @@ describe("R2Controller", () => {
 
     await controller.drive(100, 90);
 
-    expect(Array.from(transport.packets[0])).toEqual([
+    expect(Array.from(transport.packets[0]!)).toEqual([
       0x8d,
       0x0a, 0x16, 0x07, 0x00, 0x64, 0x00, 0x5a, 0x00, 0x1a,
       0xd8
@@ -60,7 +60,7 @@ describe("R2Controller", () => {
 
     await controller.drive(999, -90);
 
-    const packet = Array.from(transport.packets[0]);
+    const packet = Array.from(transport.packets[0]!);
     expect(packet).toEqual(expect.arrayContaining([0xff, 0x01, 0x0e]));
   });
 
@@ -70,7 +70,7 @@ describe("R2Controller", () => {
 
     await controller.setFrontLed(10, 20, 30);
 
-    const packet = Array.from(transport.packets[0]);
+    const packet = Array.from(transport.packets[0]!);
     expect(packet).toEqual(expect.arrayContaining([
       0x1a, 0x0e, 0x00,
       0x00, 0x07, 10, 20, 30

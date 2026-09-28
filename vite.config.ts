@@ -2,10 +2,11 @@ import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
+  base: "./",
   plugins: [
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["favicon.svg"],
+      includeAssets: ["icon.svg"],
       manifest: {
         name: "R2 Remote",
         short_name: "R2",
@@ -14,8 +15,15 @@ export default defineConfig({
         orientation: "any",
         background_color: "#07101c",
         theme_color: "#07101c",
-        start_url: "/",
-        icons: []
+        start_url: "./",
+        icons: [
+          {
+            src: "icon.svg",
+            sizes: "any",
+            type: "image/svg+xml",
+            purpose: "any maskable"
+          }
+        ]
       }
     })
   ]

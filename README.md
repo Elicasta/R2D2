@@ -1,4 +1,4 @@
-# R2 Remote
+# Droid Remote
 
 A modern controller for the Sphero Star Wars R2-D2.
 
@@ -80,3 +80,21 @@ In Xcode:
 5. Wake R2-D2 and tap **Connect**.
 
 R2-D2 normally advertises with a name beginning with `D2-`. R2-Q5 uses `Q5-`.
+
+
+## BB-8 support
+
+BB-8 is auto-detected alongside R2-D2/Q5 and uses its legacy Sphero BLE handshake and packet protocol.
+
+Current BB-8 controls:
+- touch joystick drive / heading
+- Xbox left-stick drive
+- LT precision / RT boost
+- emergency stop
+- body RGB LED
+- rear aiming LED
+- calibration / set-front flow
+- sleep / wake-ping
+- model-aware UI that hides R2-only dome, stance, audio and animation controls
+
+BB-8 battery percentage is not yet exposed in the UI; the older BB-8 reports power state through protocol responses rather than the standard battery characteristic used by R2-D2.

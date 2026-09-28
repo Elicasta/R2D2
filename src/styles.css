@@ -409,3 +409,148 @@ input[type="color"] {
     grid-row: span 1;
   }
 }
+
+
+.controller-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(149, 187, 228, 0.12);
+  border-radius: 16px;
+  background: rgba(10, 20, 33, 0.76);
+  backdrop-filter: blur(18px);
+}
+
+.controller-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.gamepad-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #60758d;
+  box-shadow: 0 0 0 4px rgba(96, 117, 141, 0.12);
+}
+
+.gamepad-dot.connected {
+  background: #47d68d;
+  box-shadow: 0 0 0 4px rgba(71, 214, 141, 0.12), 0 0 14px rgba(71, 214, 141, 0.34);
+}
+
+.controller-kicker {
+  display: block;
+  color: #7086a1;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  margin-bottom: 2px;
+}
+
+.controller-status strong {
+  display: block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+}
+
+.controller-axis-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.controller-axis-chips span {
+  padding: 7px 9px;
+  border: 1px solid rgba(149, 187, 228, 0.1);
+  border-radius: 9px;
+  background: rgba(4, 10, 17, 0.33);
+  color: #8fa7c4;
+  font-size: 0.7rem;
+}
+
+.controller-axis-chips b {
+  color: #dce9f8;
+  font-size: 0.68rem;
+  margin-right: 3px;
+}
+
+.controller-panel {
+  align-self: start;
+}
+
+.controller-hint {
+  margin-top: -2px;
+  margin-bottom: 12px;
+}
+
+.mapping-details {
+  border-top: 1px solid rgba(149, 187, 228, 0.1);
+  padding-top: 10px;
+}
+
+.mapping-details summary {
+  color: #b9cce4;
+  cursor: pointer;
+  font-size: 0.82rem;
+  user-select: none;
+}
+
+.mapping-grid {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.mapping-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 0.85fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  background: rgba(4, 10, 17, 0.28);
+}
+
+.mapping-row span {
+  color: #9eb4cf;
+  font-size: 0.76rem;
+}
+
+.mapping-row select {
+  width: 100%;
+  min-height: 32px;
+  color: #edf4ff;
+  border: 1px solid rgba(149, 187, 228, 0.14);
+  border-radius: 9px;
+  background: #102035;
+  padding: 0 8px;
+  font-size: 0.75rem;
+}
+
+@media (max-width: 760px) {
+  .controller-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .controller-axis-chips {
+    justify-content: flex-start;
+  }
+
+  .mapping-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}

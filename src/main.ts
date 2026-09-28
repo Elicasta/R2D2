@@ -613,7 +613,7 @@ async function toggleLights() {
 async function cycleGamepadSound(direction: -1 | 1) {
   if (!requireConnected()) return;
   gamepadSoundIndex = (gamepadSoundIndex + direction + GAMEPAD_SOUNDS.length) % GAMEPAD_SOUNDS.length;
-  await r2.playSound(GAMEPAD_SOUNDS[gamepadSoundIndex]);
+  await r2.playSound(GAMEPAD_SOUNDS[gamepadSoundIndex]!);
 }
 
 async function runGamepadAction(action: GamepadAction) {

@@ -54,7 +54,7 @@ final class R2NativeBridge: NSObject, WKScriptMessageHandler {
         switch action {
         case "connect":
             bluetooth.connect { [weak self] result in
-                self?.reply(id: id, result: result.map { _ in NSNull() })
+                self?.reply(id: id, result: result.map { $0.rawValue })
             }
 
         case "disconnect":
@@ -67,7 +67,7 @@ final class R2NativeBridge: NSObject, WKScriptMessageHandler {
                 let packetString = body["packet"] as? String,
                 let packet = Data(base64Encoded: packetString)
             else {
-                reply(id: id, error: "Invalid R2-D2 packet.")
+                reply(id: id, error: "Invalid droid command packet.")
                 return
             }
 

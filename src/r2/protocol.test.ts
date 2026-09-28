@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { R2Controller, R2PacketEncoder } from "./protocol";
-import type { R2Transport } from "../transports/types";
+import type { DroidKind, R2Transport } from "../transports/types";
 
 class FakeTransport implements R2Transport {
   readonly kind = "native-ble" as const;
   readonly label = "Fake";
   readonly available = true;
+  robotKind: DroidKind | null = "r2d2";
   packets: Uint8Array[] = [];
 
-  async connect() {}
+  async connect() { return "r2d2" as const; }
   async disconnect() {}
   async send(packet: Uint8Array) {
     this.packets.push(packet);

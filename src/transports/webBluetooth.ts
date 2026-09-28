@@ -1,5 +1,6 @@
+import { BB8 } from "../bb8/constants";
 import { R2 } from "../r2/constants";
-import type { R2Transport } from "./types";
+import type { DroidKind, R2Transport } from "./types";
 
 type BluetoothDeviceLike = {
   name?: string;
@@ -39,30 +40,71 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return copy.buffer;
 }
 
+function detectDroidKind(name: string | undefined): DroidKind | null {
+  if (!name) return null;
+  if (R2.namePrefixes.some((prefix) => name.startsWith(prefix))) return "r2d2";
+  if (BB8.namePrefixes.some((prefix) => name.startsWith(prefix))) return "bb8";
+  return null;
+}
+
 export class WebBluetoothTransport implements R2Transport {
   readonly kind = "web-bluetooth" as const;
   readonly label = "Direct Bluetooth";
   readonly available = Boolean((navigator as BluetoothNavigator).bluetooth);
+  robotKind: DroidKind | null = null;
 
   private device?: BluetoothDeviceLike;
   private command?: BluetoothRemoteGATTCharacteristicLike;
   private battery?: BluetoothRemoteGATTCharacteristicLike;
   private disconnectHandler?: () => void;
 
-  async connect() {
+  async connect(): Promise<DroidKind> {
     const bluetooth = (navigator as BluetoothNavigator).bluetooth;
     if (!bluetooth) throw new Error("Web Bluetooth is not supported by this browser");
 
+    const filters = [
+      ...R2.namePrefixes.map((namePrefix) => ({ namePrefix })),
+      ...BB8.namePrefixes.map((namePrefix) => ({ namePrefix }))
+    ];
+
     const device = await bluetooth.requestDevice({
-      filters: R2.namePrefixes.map((namePrefix) => ({ namePrefix })),
-      optionalServices: [R2.authService, R2.commandService, R2.batteryService]
+      filters,
+      optionalServices: [
+        R2.authService,
+        R2.commandService,
+        R2.batteryService,
+        BB8.bleService,
+        BB8.controlService
+      ]
     });
 
     if (!device.gatt) throw new Error("Bluetooth device has no GATT server");
+
+    const detected = detectDroidKind(device.name);
+    if (!detected) throw new Error("That Bluetooth device is not a supported R2-D2 or BB-8");
+
+    this.robotKind = detected;
     this.device = device;
-    device.addEventListener("gattserverdisconnected", () => this.disconnectHandler?.());
+
+    device.addEventListener("gattserverdisconnected", () => {
+      this.command = undefined;
+      this.battery = undefined;
+      this.robotKind = null;
+      this.disconnectHandler?.();
+    });
 
     const server = await device.gatt.connect();
+
+    if (detected === "bb8") {
+      await this.initializeBB8(server);
+    } else {
+      await this.initializeR2(server);
+    }
+
+    return detected;
+  }
+
+  private async initializeR2(server: BluetoothRemoteGATTServerLike) {
     const authService = await server.getPrimaryService(R2.authService);
     const auth = await authService.getCharacteristic(R2.authCharacteristic);
     const notify = await authService.getCharacteristic(R2.notifyCharacteristic);
@@ -84,14 +126,35 @@ export class WebBluetoothTransport implements R2Transport {
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 
+  private async initializeBB8(server: BluetoothRemoteGATTServerLike) {
+    const bleService = await server.getPrimaryService(BB8.bleService);
+    const antiDos = await bleService.getCharacteristic(BB8.antiDosCharacteristic);
+    const txPower = await bleService.getCharacteristic(BB8.txPowerCharacteristic);
+    const wake = await bleService.getCharacteristic(BB8.wakeCharacteristic);
+
+    const controlService = await server.getPrimaryService(BB8.controlService);
+    this.command = await controlService.getCharacteristic(BB8.commandCharacteristic);
+    const response = await controlService.getCharacteristic(BB8.responseCharacteristic);
+
+    await response.startNotifications();
+    await antiDos.writeValue(toArrayBuffer(BB8.antiDosMessage));
+    await txPower.writeValue(toArrayBuffer(new Uint8Array([0x07])));
+    await wake.writeValue(toArrayBuffer(new Uint8Array([0x01])));
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    this.battery = undefined;
+  }
+
   async disconnect() {
     this.device?.gatt?.disconnect();
     this.command = undefined;
     this.battery = undefined;
+    this.robotKind = null;
   }
 
   async send(packet: Uint8Array) {
-    if (!this.command) throw new Error("R2-D2 is not connected");
+    if (!this.command) throw new Error("Droid command channel is not ready");
+
     const buffer = toArrayBuffer(packet);
     if (this.command.writeValueWithoutResponse) {
       await this.command.writeValueWithoutResponse(buffer);
@@ -101,7 +164,9 @@ export class WebBluetoothTransport implements R2Transport {
   }
 
   async readBattery() {
+    if (this.robotKind === "bb8") return null;
     if (!this.battery) return null;
+
     const value = await this.battery.readValue();
     return value.byteLength ? value.getUint8(0) : null;
   }

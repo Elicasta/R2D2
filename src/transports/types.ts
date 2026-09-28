@@ -1,4 +1,5 @@
 export type TransportKind = "native-ble" | "web-bluetooth" | "mac-bridge";
+export type DroidKind = "r2d2" | "bb8";
 
 export type R2ConnectionState =
   | "idle"
@@ -12,7 +13,8 @@ export interface R2Transport {
   readonly kind: TransportKind;
   readonly label: string;
   readonly available: boolean;
-  connect(): Promise<void>;
+  robotKind: DroidKind | null;
+  connect(): Promise<DroidKind>;
   disconnect(): Promise<void>;
   send(packet: Uint8Array): Promise<void>;
   readBattery(): Promise<number | null>;

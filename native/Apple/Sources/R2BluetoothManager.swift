@@ -28,6 +28,11 @@ final class R2BluetoothManager: NSObject {
         }
     }
 
+    private struct QueuedWrite {
+        let data: Data
+        let completion: (Result<Void, Error>) -> Void
+    }
+
     private enum UUIDs {
         static let authService = CBUUID(string: "00020001-574F-4F20-5370-6865726F2121")
         static let authCharacteristic = CBUUID(string: "00020005-574F-4F20-5370-6865726F2121")
@@ -50,6 +55,10 @@ final class R2BluetoothManager: NSObject {
     private var scanTimeout: DispatchWorkItem?
     private var didAuthenticate = false
     private var didFinishConnection = false
+    private var connected = false
+
+    private var writeQueue: [QueuedWrite] = []
+    private var responseWriteCompletion: ((Result<Void, Error>) -> Void)?
 
     var onDisconnect: (() -> Void)?
 
@@ -59,12 +68,12 @@ final class R2BluetoothManager: NSObject {
     }
 
     func connect(completion: @escaping (Result<Void, Error>) -> Void) {
-        if let peripheral, peripheral.state == .connected, commandCharacteristic != nil {
+        if connected, let peripheral, peripheral.state == .connected, commandCharacteristic != nil {
             completion(.success(()))
             return
         }
 
-        resetConnectionState(keepCentral: true)
+        resetConnectionState()
         connectCompletion = completion
 
         guard central.state == .poweredOn else {
@@ -81,14 +90,16 @@ final class R2BluetoothManager: NSObject {
         scanTimeout?.cancel()
         central.stopScan()
 
+        failPendingWrites(with: R2Error.commandUnavailable)
+
         guard let peripheral else {
-            resetConnectionState(keepCentral: true)
+            resetConnectionState()
             completion?()
             return
         }
 
         central.cancelPeripheralConnection(peripheral)
-        resetConnectionState(keepCentral: true)
+        resetConnectionState()
         completion?()
     }
 
@@ -97,16 +108,18 @@ final class R2BluetoothManager: NSObject {
             completion(.failure(R2Error.invalidPacket))
             return
         }
-        guard let peripheral, peripheral.state == .connected, let characteristic = commandCharacteristic else {
+
+        guard connected,
+              let peripheral,
+              peripheral.state == .connected,
+              commandCharacteristic != nil
+        else {
             completion(.failure(R2Error.commandUnavailable))
             return
         }
 
-        let type: CBCharacteristicWriteType =
-            characteristic.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
-
-        peripheral.writeValue(data, for: characteristic, type: type)
-        completion(.success(()))
+        writeQueue.append(QueuedWrite(data: data, completion: completion))
+        drainWriteQueue()
     }
 
     func readBattery(completion: @escaping (Result<Int, Error>) -> Void) {
@@ -126,6 +139,44 @@ final class R2BluetoothManager: NSObject {
         }
     }
 
+    private func drainWriteQueue() {
+        guard
+            connected,
+            let peripheral,
+            peripheral.state == .connected,
+            let characteristic = commandCharacteristic,
+            !writeQueue.isEmpty
+        else { return }
+
+        if characteristic.properties.contains(.writeWithoutResponse) {
+            guard peripheral.canSendWriteWithoutResponse else { return }
+
+            let write = writeQueue.removeFirst()
+            peripheral.writeValue(write.data, for: characteristic, type: .withoutResponse)
+            write.completion(.success(()))
+
+            DispatchQueue.main.async { [weak self] in
+                self?.drainWriteQueue()
+            }
+            return
+        }
+
+        guard responseWriteCompletion == nil else { return }
+        let write = writeQueue.removeFirst()
+        responseWriteCompletion = write.completion
+        peripheral.writeValue(write.data, for: characteristic, type: .withResponse)
+    }
+
+    private func failPendingWrites(with error: Error) {
+        let queued = writeQueue
+        writeQueue.removeAll()
+        queued.forEach { $0.completion(.failure(error)) }
+
+        let response = responseWriteCompletion
+        responseWriteCompletion = nil
+        response?(.failure(error))
+    }
+
     private func beginScan() {
         guard !central.isScanning else { return }
 
@@ -143,7 +194,7 @@ final class R2BluetoothManager: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 12, execute: timeout)
     }
 
-    private func resetConnectionState(keepCentral: Bool) {
+    private func resetConnectionState() {
         scanTimeout?.cancel()
         scanTimeout = nil
         peripheral = nil
@@ -154,6 +205,9 @@ final class R2BluetoothManager: NSObject {
         batteryCompletion = nil
         didAuthenticate = false
         didFinishConnection = false
+        connected = false
+        writeQueue.removeAll()
+        responseWriteCompletion = nil
     }
 
     private func finishConnect(_ result: Result<Void, Error>) {
@@ -161,6 +215,14 @@ final class R2BluetoothManager: NSObject {
         didFinishConnection = true
         scanTimeout?.cancel()
         scanTimeout = nil
+
+        switch result {
+        case .success:
+            connected = true
+        case .failure:
+            connected = false
+        }
+
         let completion = connectCompletion
         connectCompletion = nil
         completion?(result)
@@ -179,7 +241,9 @@ final class R2BluetoothManager: NSObject {
         if let notifyCharacteristic {
             peripheral.setNotifyValue(true, for: notifyCharacteristic)
         }
-        peripheral.setNotifyValue(true, for: commandCharacteristic)
+        if commandCharacteristic.properties.contains(.notify) {
+            peripheral.setNotifyValue(true, for: commandCharacteristic)
+        }
 
         let auth = Data("usetheforce...band".utf8)
         let writeType: CBCharacteristicWriteType =
@@ -245,9 +309,11 @@ extension R2BluetoothManager: CBCentralManagerDelegate {
         didDisconnectPeripheral peripheral: CBPeripheral,
         error: Error?
     ) {
-        let hadConnection = didFinishConnection
-        resetConnectionState(keepCentral: true)
-        if hadConnection {
+        let wasConnected = connected
+        failPendingWrites(with: R2Error.commandUnavailable)
+        resetConnectionState()
+
+        if wasConnected {
             onDisconnect?()
         }
     }
@@ -330,5 +396,28 @@ extension R2BluetoothManager: CBPeripheralDelegate {
         }
 
         completion?(.success(Int(first)))
+    }
+
+    func peripheral(
+        _ peripheral: CBPeripheral,
+        didWriteValueFor characteristic: CBCharacteristic,
+        error: Error?
+    ) {
+        guard characteristic.uuid == UUIDs.commandCharacteristic else { return }
+
+        let completion = responseWriteCompletion
+        responseWriteCompletion = nil
+
+        if let error {
+            completion?(.failure(error))
+        } else {
+            completion?(.success(()))
+        }
+
+        drainWriteQueue()
+    }
+
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        drainWriteQueue()
     }
 }

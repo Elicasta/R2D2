@@ -554,3 +554,24 @@ input[type="color"] {
     gap: 6px;
   }
 }
+
+
+.droid-hidden {
+  display: none !important;
+}
+
+.bb8-panel {
+  align-self: start;
+}
+
+.bb8-calibration-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.bb8-calibration-actions button:first-child {
+  border-color: rgba(255, 173, 76, 0.24);
+  background: linear-gradient(180deg, rgba(83, 57, 27, 0.9), rgba(43, 31, 19, 0.95));
+}

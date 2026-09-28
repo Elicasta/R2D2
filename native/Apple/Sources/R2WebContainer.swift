@@ -1,7 +1,7 @@
 import SwiftUI
 import WebKit
 
-private final class R2WebViewFactory {
+private final class R2WebViewFactory: NSObject, WKNavigationDelegate {
     let bridge = R2NativeBridge()
 
     func make() -> WKWebView {
@@ -16,6 +16,7 @@ private final class R2WebViewFactory {
         #endif
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = self
         bridge.webView = webView
 
         #if os(iOS)
@@ -37,20 +38,67 @@ private final class R2WebViewFactory {
             withExtension: "html",
             subdirectory: "WebApp"
         ) else {
-            let html = """
-            <html>
-              <body style="background:#07101c;color:white;font-family:-apple-system;padding:40px">
-                <h2>R2 Remote UI missing</h2>
-                <p>Run the web sync build before launching the native app.</p>
-              </body>
-            </html>
-            """
-            webView.loadHTMLString(html, baseURL: nil)
+            showError(
+                in: webView,
+                title: "R2 Remote UI missing",
+                detail: "WebApp/index.html was not bundled. Run the bootstrap script again."
+            )
             return
         }
 
-        let directory = indexURL.deletingLastPathComponent()
-        webView.loadFileURL(indexURL, allowingReadAccessTo: directory)
+        do {
+            let html = try String(contentsOf: indexURL, encoding: .utf8)
+
+            // The native build is deliberately self-contained, so WKWebView never
+            // needs file:// access to the app bundle. This avoids iOS sandbox
+            // extension failures seen when WebContent tries to open bundle files.
+            webView.loadHTMLString(html, baseURL: nil)
+        } catch {
+            showError(
+                in: webView,
+                title: "R2 Remote UI could not load",
+                detail: error.localizedDescription
+            )
+        }
+    }
+
+    private func showError(in webView: WKWebView, title: String, detail: String) {
+        let escapedTitle = title
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+        let escapedDetail = detail
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+
+        let html = """
+        <!doctype html>
+        <html>
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <body style="margin:0;background:#07101c;color:white;font-family:-apple-system;padding:40px">
+            <h2>\(escapedTitle)</h2>
+            <p style="color:#9eb4cf;line-height:1.5">\(escapedDetail)</p>
+          </body>
+        </html>
+        """
+        webView.loadHTMLString(html, baseURL: nil)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFail navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        print("R2WebView navigation failed: \(error.localizedDescription)")
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        print("R2WebView provisional navigation failed: \(error.localizedDescription)")
     }
 }
 

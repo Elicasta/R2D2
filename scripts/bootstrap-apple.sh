@@ -19,7 +19,7 @@ if ! command -v xcodegen >/dev/null 2>&1; then
   fi
 fi
 
-"$ROOT/scripts/sync-native-web.sh"
+bash "$ROOT/scripts/sync-native-web.sh"
 
 cd "$ROOT/native/Apple"
 xcodegen generate
